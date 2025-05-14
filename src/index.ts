@@ -5,6 +5,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import axios from 'axios';
 import { z } from 'zod';
+import { format } from 'date-fns'; 
+import { toZonedTime } from 'date-fns-tz'; 
 import {
   Price,
   RouteStationData,
@@ -136,42 +138,40 @@ const DW_FLAGS = [
 ];
 
 const TRAIN_FILTERS = {
-  //G(高铁/城际),D(动车),Z(直达特快),T(特快),K(快速),O(其他),F(复兴号),S(智能动车组)
   G: (ticketInfo: TicketInfo) => {
-    return ticketInfo.train_no.startsWith('G') ||
-      ticketInfo.train_no.startsWith('C')
-      ? true
-      : false;
+    return ticketInfo.start_train_code.startsWith('G') || 
+           ticketInfo.start_train_code.startsWith('C')   
+           ? true
+           : false;
   },
   D: (ticketInfo: TicketInfo) => {
-    return ticketInfo.train_no.startsWith('D') ? true : false;
+    return ticketInfo.start_train_code.startsWith('D') ? true : false;
   },
   Z: (ticketInfo: TicketInfo) => {
-    return ticketInfo.train_no.startsWith('Z') ? true : false;
+    return ticketInfo.start_train_code.startsWith('Z') ? true : false; 
   },
   T: (ticketInfo: TicketInfo) => {
-    return ticketInfo.train_no.startsWith('T') ? true : false;
+    return ticketInfo.start_train_code.startsWith('T') ? true : false; 
   },
   K: (ticketInfo: TicketInfo) => {
-    return ticketInfo.train_no.startsWith('K') ? true : false;
+    return ticketInfo.start_train_code.startsWith('K') ? true : false; 
   },
   O: (ticketInfo: TicketInfo) => {
     return TRAIN_FILTERS.G(ticketInfo) ||
-      TRAIN_FILTERS.D(ticketInfo) ||
-      TRAIN_FILTERS.Z(ticketInfo) ||
-      TRAIN_FILTERS.T(ticketInfo) ||
-      TRAIN_FILTERS.K(ticketInfo)
-      ? false
-      : true;
+           TRAIN_FILTERS.D(ticketInfo) ||
+           TRAIN_FILTERS.Z(ticketInfo) ||
+           TRAIN_FILTERS.T(ticketInfo) ||
+           TRAIN_FILTERS.K(ticketInfo)
+           ? false
+           : true;
   },
-  F: (ticketInfo: TicketInfo) => {
+  F: (ticketInfo: TicketInfo) => { // 
     return ticketInfo.dw_flag.includes('复兴号') ? true : false;
   },
-  S: (ticketInfo: TicketInfo) => {
+  S: (ticketInfo: TicketInfo) => { // 
     return ticketInfo.dw_flag.includes('智能动车组') ? true : false;
   },
 };
-
 function parseCookies(cookies: Array<string>): Record<string, string> {
   const cookieRecord: Record<string, string> = {};
   cookies.forEach((cookie) => {
@@ -424,7 +424,26 @@ const server = new McpServer({
     tools: {},
   },
   instructions:
-    'This server provides information about 12306.You can use this server to query train tickets on 12306.',
+    '你是一个12306火车票务助手。你的主要任务是帮助用户查询火车票信息、特定列车的经停站信息以及相关的车站信息。请仔细理解用户的意图，并按以下指引选择合适的工具：\n\n' +
+    '**核心场景：查询两地之间的火车票**\n' +
+    '1.  **日期处理**: 用户可能会使用相对日期（如“明天”、“下周五”）。此时，你必须先调用 `get-current-date` 工具获取当前日期（上海时区，格式 "yyyy-MM-dd"），然后基于此计算出用户指定的具体日期。\n' +
+    '2.  **地点处理 (获取 station_code)**: `get-tickets` 工具需要的是 `station_code` 而不是中文地名。\n' +
+    '    *   如果用户提供的是 **城市名** (如“衡阳”、“北京”)，使用 `get-station-code-of-city` 工具将其转换为对应城市的 `station_code`。\n' +
+    '    *   如果用户提供的是 **具体车站名** (如“衡阳东站”、“北京南站”)，使用 `get-station-code-by-name` 工具将其转换为该车站的 `station_code`。\n' +
+    '    *   **严禁直接使用中文地名作为 `get-tickets` 工具的 `fromStation` 或 `toStation` 参数。**\n' +
+    '3.  **车票查询**: 获得准确的日期和出发地/到达地的 `station_code` 后，调用 `get-tickets` 工具进行查询。\n' +
+    '    *   如果用户指定了列车类型（如“高铁”、“动车”），请在 `get-tickets` 的 `trainFilterFlags` 参数中设置相应的值 (如 "G" 代表高铁/城际，"D" 代表动车)。\n\n' +
+    '**其他场景与工具使用：**\n' +
+    '*   **查询特定列车经停站**: 如果用户想知道某趟具体列车（如 G123）会经过哪些车站及其到发时间，请使用 `get-train-route-stations` 工具。\n' +
+    '    *   此工具需要 `train_no` (实际车次编号，通常可从 `get-tickets` 的结果中获得，或用户直接提供)、出发站和到达站的 `station_telecode` (注意，这里的 `telecode` 通常就是你通过地点处理步骤获得的 `station_code`) 以及列车的出发日期。\n' +
+    '*   **查询城市内的所有车站**: 如果用户想了解某个城市有哪些火车站，可以使用 `get-stations-code-in-city` 工具。这会返回一个列表。\n' +
+    '*   **通过车站电报码查询车站信息**: 如果有特殊需求或已知车站的 `station_telecode` (通常是3位字母编码)，可以使用 `get-station-by-telecode` 工具查询该车站的详细信息。这在一般用户查询中较少直接用到。\n\n' +
+    '**通用原则：**\n' +
+    '*   **优先理解意图**：根据用户的提问判断其真实需求，是查票、查经停站还是查车站信息。\n' +
+    '*   **参数准确性**：确保传递给每个工具的参数格式和类型都正确，特别是日期格式和地点编码。\n' +
+    '*   **必要时追问**：如果用户信息不足以调用工具（例如，只说了“北京到上海”，没说日期），请向用户追问缺失的信息。\n' +
+    '*   **清晰呈现结果**：将工具返回的信息以用户易于理解的方式进行组织和呈现。\n\n' +
+    '请根据上述指引，智能地选择和调用工具。',
 });
 
 interface QueryResponse {
@@ -442,8 +461,29 @@ server.resource('stations', 'data://all-stations', async (uri) => ({
 }));
 
 server.tool(
+  'get-current-date', 
+  '获取当前日期，以上海时区（Asia/Shanghai, UTC+8）为准，返回格式为 "yyyy-MM-dd"。主要用于解析用户提到的相对日期（如“明天”、“下周三”），以便为其他需要日期的工具（如 `get-tickets` 或 `get-train-route-stations`）提供准确的日期输入。',
+  {}, 
+  async () => {
+    try {
+      const timeZone = 'Asia/Shanghai';
+      const nowInShanghai = toZonedTime(new Date(), timeZone);
+      const formattedDate = format(nowInShanghai, 'yyyy-MM-dd');
+      return {
+        content: [{ type: 'text', text: formattedDate }],
+      };
+    } catch (error) {
+      console.error('Error getting current date:', error);
+      return {
+        content: [{ type: 'text', text: 'Error: Failed to get current date.' }],
+      };
+    }
+  }
+);
+
+server.tool(
   'get-stations-code-in-city',
-  '通过城市名查询该城市所有车站的station_code，结果为列表。',
+  '通过中文城市名查询该城市 **所有** 火车站的名称及其对应的 `station_code`，结果是一个包含多个车站信息的列表。当用户想了解一个城市有哪些火车站，或者不确定具体从哪个车站出发/到达时可以使用此工具。',
   {
     city: z.string().describe('中文城市名称'),
   },
@@ -461,9 +501,9 @@ server.tool(
 
 server.tool(
   'get-station-code-of-city',
-  '通过城市名查询该城市对应的station_code，结果是唯一的。',
+  '通过中文城市名（如“衡阳”）查询该城市 **主要或默认火车站** 的 `station_code` 和车站名，结果是唯一的。此工具主要用于在用户提供城市名作为出发地或到达地时，为 `get-tickets` 工具准备 `station_code` 参数。',
   {
-    city: z.string().describe('中文城市名称'),
+    city: z.string().describe('中文城市名称，例如："北京", "上海"'),
   },
   async ({ city }) => {
     if (!(city in CITY_CODES)) {
@@ -479,9 +519,9 @@ server.tool(
 
 server.tool(
   'get-station-code-by-name',
-  '通过车站名查询station_code，结果是唯一的。',
+  '通过具体的中文车站名（如“衡阳东站”）查询其 `station_code` 和车站名，结果是唯一的。此工具主要用于在用户提供具体车站名作为出发地或到达地时，为 `get-tickets` 工具准备 `station_code` 参数。',
   {
-    stationName: z.string().describe('中文车站名称'),
+    stationName: z.string().describe('具体的中文车站名称，例如："北京南", "上海虹桥" (如果用户说了“衡阳东站”，就用“衡阳东”)'),
   },
   async ({ stationName }) => {
     stationName = stationName.endsWith('站')
@@ -502,9 +542,9 @@ server.tool(
 
 server.tool(
   'get-station-by-telecode',
-  '通过station_telecode查询车站信息，结果是唯一的。',
+  '通过车站的 `station_telecode` (通常是3位字母编码) 查询车站的详细信息，包括名称、拼音、所属城市等。此工具主要用于在已知 `telecode` 的情况下获取更完整的车站数据，或用于特殊查询及调试目的。一般用户对话流程中较少直接触发。',
   {
-    stationTelecode: z.string().describe('车站的station_telecode'),
+    stationTelecode: z.string().describe('车站的 `station_telecode` (3位字母编码)'),
   },
   async ({ stationTelecode }) => {
     if (!STATIONS[stationTelecode]) {
@@ -522,15 +562,15 @@ server.tool(
 
 server.tool(
   'get-tickets',
-  '查询12306余票信息。',
+  '查询12306余票信息。重要提示：调用此工具前，必须确保 `date` 参数是 "yyyy-MM-dd" 格式（若用户提供相对日期，先用 `get-current-date` 获取并计算），并且 `fromStation` 和 `toStation` 参数必须是 `station_code`（若用户提供中文地名，先用 `get-station-code-by-name` 或 `get-station-code-of-city` 获取）。',
   {
-    date: z.string().length(10).describe('日期( 格式: yyyy-mm-dd )'),
+    date: z.string().length(10).describe('查询日期，格式为 "yyyy-MM-dd"。如果用户提供的是相对日期（如“明天”），请务必先调用 `get-current-date` 工具获取当前日期，并计算出目标日期。'),
     fromStation: z
       .string()
-      .describe('出发车站的station_code 或 出发城市的station_code'),
+      .describe('出发地的 `station_code` 。必须是通过 `get-station-code-by-name` 或 `get-station-code-of-city` 工具查询得到的编码，严禁直接使用中文地名。'),
     toStation: z
       .string()
-      .describe('到达车站的station_code 或 到达城市的station_code'),
+      .describe('到达地的 `station_code` 。必须是通过 `get-station-code-by-name` 或 `get-station-code-of-city` 工具查询得到的编码，严禁直接使用中文地名。'),
     trainFilterFlags: z
       .string()
       .regex(/^[GDZTKOFS]*$/)
@@ -538,7 +578,7 @@ server.tool(
       .optional()
       .default('')
       .describe(
-        '车次筛选条件，默认为空。从以下标志中选取多个条件组合[G(高铁/城际),D(动车),Z(直达特快),T(特快),K(快速),O(其他),F(复兴号),S(智能动车组)]'
+        '车次筛选条件，默认为空。例如用户说“高铁票”，则应使用 "G"。可选标志：[G(高铁/城际),D(动车),Z(直达特快),T(特快),K(快速),O(其他),F(复兴号),S(智能动车组)]'
       ),
   },
   async ({ date, fromStation, toStation, trainFilterFlags }) => {
@@ -610,19 +650,19 @@ server.tool(
 
 server.tool(
   'get-train-route-stations',
-  '查询列车途径车站信息。',
+  '查询特定列车车次在指定区间内的途径车站、到站时间、出发时间及停留时间等详细经停信息。当用户询问某趟具体列车的经停站时使用此工具。',
   {
-    trainNo: z.string().describe('实际车次编号train_no，例如240000G10336.'),
+    trainNo: z.string().describe('要查询的实际车次编号 `train_no`，例如 "240000G10336"。此编号通常可以从 `get-tickets` 的查询结果中获取，或者由用户直接提供。'),
     fromStationTelecode: z
       .string()
-      .describe('出发车站的station_telecode_code，而非城市的station_code.'),
+      .describe('该列车行程的出发站的 `station_telecode` (3位字母编码，即 `station_code`)。此 `telecode` 通常来自 `get-tickets` 结果中的 `from_station_telecode` 字段，或者通过 `get-station-code-by-name`/`get-station-code-of-city` 转换用户提供的车站名得到。'),
     toStationTelecode: z
       .string()
-      .describe('到达车站的station_telecode_code，而非城市的station_code.'),
+      .describe('该列车行程的到达站的 `station_telecode` (3位字母编码，即 `station_code`)。获取方式同 `fromStationTelecode`。'),
     departDate: z
       .string()
       .length(10)
-      .describe('列车出发日期( 格式: yyyy-mm-dd )'),
+      .describe('列车从 `fromStationTelecode` 指定的车站出发的日期 (格式: yyyy-MM-dd)。如果用户提供的是相对日期，请务必先调用 `get-current-date` 解析。'),
   },
   async ({
     trainNo: trainNo,

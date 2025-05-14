@@ -7,13 +7,19 @@
     "test": "tsc && node ./build/index.js",
     "debug": "tsc && npx @modelcontextprotocol/inspector node ./build/index.js"
   },
-  "keywords": ["mcp","12306", "mcp-server"],
+  "keywords": [
+    "mcp",
+    "12306",
+    "mcp-server"
+  ],
   "author": "joooook",
   "license": "MIT",
   "description": "This is a 12306 ticket search server based on the Model Context Protocol (MCP). ",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.9.0",
     "axios": "^1.8.4",
+    "date-fns": "^4.1.0",
+    "date-fns-tz": "^3.2.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
