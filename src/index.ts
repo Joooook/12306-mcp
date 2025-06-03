@@ -714,7 +714,7 @@ server.resource('stations', 'data://all-stations', async (uri) => ({
 }));
 
 server.tool(
-  'get-current-date',
+  'get_current_date',
   '获取当前日期，以上海时区（Asia/Shanghai, UTC+8）为准，返回格式为 "yyyy-MM-dd"。主要用于解析用户提到的相对日期（如“明天”、“下周三”），为其他需要日期的接口提供准确的日期输入。',
   {},
   async () => {
@@ -735,7 +735,7 @@ server.tool(
 );
 
 server.tool(
-  'get-stations-code-in-city',
+  'get_stations_code_in_city',
   '通过中文城市名查询该城市 **所有** 火车站的名称及其对应的 `station_code`，结果是一个包含多个车站信息的列表。',
   {
     city: z.string().describe('中文城市名称，例如："北京", "上海"'),
@@ -753,7 +753,7 @@ server.tool(
 );
 
 server.tool(
-  'get-station-code-of-citys',
+  'get_station_code_of_citys',
   '通过中文城市名查询代表该城市的 `station_code`。此接口主要用于在用户提供**城市名**作为出发地或到达地时，为接口准备 `station_code` 参数。',
   {
     citys: z
@@ -778,7 +778,7 @@ server.tool(
 );
 
 server.tool(
-  'get-station-code-by-names',
+  'get_station_code_by_names',
   '通过具体的中文车站名查询其 `station_code` 和车站名。此接口主要用于在用户提供**具体车站名**作为出发地或到达地时，为接口准备 `station_code` 参数。',
   {
     stationNames: z
@@ -806,7 +806,7 @@ server.tool(
 );
 
 server.tool(
-  'get-station-by-telecode',
+  'get_station_by_telecode',
   '通过车站的 `station_telecode` 查询车站的详细信息，包括名称、拼音、所属城市等。此接口主要用于在已知 `telecode` 的情况下获取更完整的车站数据，或用于特殊查询及调试目的。一般用户对话流程中较少直接触发。',
   {
     stationTelecode: z
@@ -828,24 +828,24 @@ server.tool(
 );
 
 server.tool(
-  'get-tickets',
+  'get_tickets',
   '查询12306余票信息。',
   {
     date: z
       .string()
       .length(10)
       .describe(
-        '查询日期，格式为 "yyyy-MM-dd"。如果用户提供的是相对日期（如“明天”），请务必先调用 `get-current-date` 接口获取当前日期，并计算出目标日期。'
+        '查询日期，格式为 "yyyy-MM-dd"。如果用户提供的是相对日期（如“明天”），请务必先调用 `get_current_date` 接口获取当前日期，并计算出目标日期。'
       ),
     fromStation: z
       .string()
       .describe(
-        '出发地的 `station_code` 。必须是通过 `get-station-code-by-names` 或 `get-station-code-of-citys` 接口查询得到的编码，严禁直接使用中文地名。'
+        '出发地的 `station_code` 。必须是通过 `get_station_code_by_names` 或 `get_station_code_of_citys` 接口查询得到的编码，严禁直接使用中文地名。'
       ),
     toStation: z
       .string()
       .describe(
-        '到达地的 `station_code` 。必须是通过 `get-station-code-by-names` 或 `get-station-code-of-citys` 接口查询得到的编码，严禁直接使用中文地名。'
+        '到达地的 `station_code` 。必须是通过 `get_station_code_by_names` 或 `get_station_code_of_citys` 接口查询得到的编码，严禁直接使用中文地名。'
       ),
     trainFilterFlags: z
       .string()
@@ -974,31 +974,31 @@ interface InterlineQueryResponse extends QueryResponse {
 // channel=E  ?channel是什么用的
 
 server.tool(
-  'get-interline-tickets',
+  'get_interline_tickets',
   '查询12306中转余票信息。尚且只支持查询前十条。',
   {
     date: z
       .string()
       .length(10)
       .describe(
-        '查询日期，格式为 "yyyy-MM-dd"。如果用户提供的是相对日期（如“明天”），请务必先调用 `get-current-date` 接口获取当前日期，并计算出目标日期。'
+        '查询日期，格式为 "yyyy-MM-dd"。如果用户提供的是相对日期（如“明天”），请务必先调用 `get_current_date` 接口获取当前日期，并计算出目标日期。'
       ),
     fromStation: z
       .string()
       .describe(
-        '出发地的 `station_code` 。必须是通过 `get-station-code-by-names` 或 `get-station-code-of-citys` 接口查询得到的编码，严禁直接使用中文地名。'
+        '出发地的 `station_code` 。必须是通过 `get_station_code_by_names` 或 `get_station_code_of_citys` 接口查询得到的编码，严禁直接使用中文地名。'
       ),
     toStation: z
       .string()
       .describe(
-        '出发地的 `station_code` 。必须是通过 `get-station-code-by-names` 或 `get-station-code-of-citys` 接口查询得到的编码，严禁直接使用中文地名。'
+        '出发地的 `station_code` 。必须是通过 `get_station_code_by_names` 或 `get_station_code_of_citys` 接口查询得到的编码，严禁直接使用中文地名。'
       ),
     middleStation: z
       .string()
       .optional()
       .default('')
       .describe(
-        '中转地的 `station_code` ，可选。必须是通过 `get-station-code-by-names` 或 `get-station-code-of-citys` 接口查询得到的编码，严禁直接使用中文地名。'
+        '中转地的 `station_code` ，可选。必须是通过 `get_station_code_by_names` 或 `get_station_code_of_citys` 接口查询得到的编码，严禁直接使用中文地名。'
       ),
     showWZ: z
       .boolean()
@@ -1148,29 +1148,29 @@ interface RouteQueryResponse extends QueryResponse {
 }
 
 server.tool(
-  'get-train-route-stations',
+  'get_train_route_stations',
   '查询特定列车车次在指定区间内的途径车站、到站时间、出发时间及停留时间等详细经停信息。当用户询问某趟具体列车的经停站时使用此接口。',
   {
     trainNo: z
       .string()
       .describe(
-        '要查询的实际车次编号 `train_no`，例如 "240000G10336"，而非"G1033"。此编号通常可以从 `get-tickets` 的查询结果中获取，或者由用户直接提供。'
+        '要查询的实际车次编号 `train_no`，例如 "240000G10336"，而非"G1033"。此编号通常可以从 `get_tickets` 的查询结果中获取，或者由用户直接提供。'
       ),
     fromStationTelecode: z
       .string()
       .describe(
-        '该列车行程的**出发站**的 `station_telecode` (3位字母编码`)。通常来自 `get-tickets` 结果中的 `telecode` 字段，或者通过 `get-station-code-by-names` 得到。'
+        '该列车行程的**出发站**的 `station_telecode` (3位字母编码`)。通常来自 `get_tickets` 结果中的 `telecode` 字段，或者通过 `get_station_code_by_names` 得到。'
       ),
     toStationTelecode: z
       .string()
       .describe(
-        '该列车行程的**到达站**的 `station_telecode` (3位字母编码)。通常来自 `get-tickets` 结果中的 `telecode` 字段，或者通过 `get-station-code-by-names` 得到。'
+        '该列车行程的**到达站**的 `station_telecode` (3位字母编码)。通常来自 `get_tickets` 结果中的 `telecode` 字段，或者通过 `get_station_code_by_names` 得到。'
       ),
     departDate: z
       .string()
       .length(10)
       .describe(
-        '列车从 `fromStationTelecode` 指定的车站出发的日期 (格式: yyyy-MM-dd)。如果用户提供的是相对日期，请务必先调用 `get-current-date` 解析。'
+        '列车从 `fromStationTelecode` 指定的车站出发的日期 (格式: yyyy-MM-dd)。如果用户提供的是相对日期，请务必先调用 `get_current_date` 解析。'
       ),
   },
   async ({
