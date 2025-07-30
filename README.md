@@ -45,8 +45,7 @@ npm i
 
 ### CLI
 ~~~bash
-npm run build
-node ./build/index.js
+npx -y 12306-mcp
 ~~~
 
 ### MCP sever configuration

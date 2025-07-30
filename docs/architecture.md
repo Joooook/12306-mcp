@@ -16,17 +16,17 @@ graph TB
         McpServer["MCP Server"]
         
         subgraph "基础工具层"
-            GetDate["get-current-date"]
-            GetCityStations["get-stations-code-in-city"]
-            GetCityCodes["get-station-code-of-citys"]
-            GetStationNames["get-station-code-by-names"]
-            GetStationInfo["get-station-by-telecode"]
+            GetDate["get_current_date"]
+            GetCityStations["get_stations_code_in_city"]
+            GetCityCodes["get_station_code_of_citys"]
+            GetStationNames["get_station_code_by_names"]
+            GetStationInfo["get_station_by_telecode"]
         end
         
         subgraph "核心工具层"
-            GetTickets["get-tickets"]
-            GetInterline["get-interline-tickets"]
-            GetRoute["get-train-route-stations"]
+            GetTickets["get_tickets"]
+            GetInterline["get_interline_tickets"]
+            GetRoute["get_train_route_stations"]
         end
     end
     
