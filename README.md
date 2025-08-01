@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/joooook-12306-mcp-badge.png)](https://mseep.ai/app/joooook-12306-mcp)
+
 # <div align="center">12306-mcp</div>
 
 <div align="center">
