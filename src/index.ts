@@ -27,6 +27,7 @@ import {
 const VERSION = '0.3.7';
 const API_BASE = 'https://kyfw.12306.cn';
 const SEARCH_API_BASE = 'https://search.12306.cn';
+const RAIL_RE_API_BASE = 'https://api.rail.re';
 const WEB_URL = 'https://www.12306.cn/index/';
 const LCQUERY_INIT_URL = 'https://kyfw.12306.cn/otn/lcQuery/init';
 const LCQUERY_PATH = await getLCQueryPath();
@@ -150,6 +151,10 @@ const DW_FLAGS = [
     '支持选铺',
     '老年优惠',
 ];
+
+const TRAIN_CODE_RE = /^[A-Z]{1,3}\d{1,5}$/;
+const MODEL_PREFIX_RE = /^([A-Za-z]+\d+[A-Za-z]+)/;
+const MODEL_RE = /^([A-Za-z0-9]+)\d+$/;
 
 const TRAIN_FILTERS = {
     //G(高铁/城际),D(动车),Z(直达特快),T(特快),K(快速),O(其他),F(复兴号),S(智能动车组)
@@ -275,6 +280,59 @@ function formatCookies(cookies: Record<string, string>): string {
     return Object.entries(cookies)
         .map(([key, value]) => `${key}=${value}`)
         .join('; ');
+}
+
+function normalizeTrainCode(value: string): string {
+    return value.replace(/\s+/g, '').toUpperCase();
+}
+
+function extractModelFromEmu(emuNo: string): string | null {
+    if (!emuNo) {
+        return null;
+    }
+    const prefixMatch = emuNo.match(MODEL_PREFIX_RE);
+    if (prefixMatch) {
+        return prefixMatch[1];
+    }
+    const match = emuNo.match(MODEL_RE);
+    if (match) {
+        return match[1];
+    }
+    return emuNo;
+}
+
+function inferModelType(modelName: string): string {
+    if (modelName.startsWith('CRH')) {
+        return '和谐号';
+    }
+    if (modelName.startsWith('CR')) {
+        return '复兴号';
+    }
+    return '其他';
+}
+
+type RailReTrainRecord = {
+    emu_no?: string;
+    train_no?: string;
+    date?: string;
+};
+
+async function fetchRailReTrainRecords(
+    trainCode: string
+): Promise<RailReTrainRecord[] | null> {
+    try {
+        const response = await axios.get(
+            `${RAIL_RE_API_BASE}/train/${encodeURIComponent(trainCode)}`,
+            { headers: { Accept: 'application/json' } }
+        );
+        if (Array.isArray(response.data)) {
+            return response.data as RailReTrainRecord[];
+        }
+        return null;
+    } catch (error) {
+        console.error('Error making rail.re request:', error);
+        return null;
+    }
 }
 
 async function getCookie() {
@@ -1480,6 +1538,138 @@ server.tool(
                 formatedResult = formatRouteStationsInfo(routeStationsInfo);
                 break;
         }
+        return {
+            content: [{ type: 'text', text: formatedResult }],
+        };
+    }
+);
+
+server.tool(
+    'get-train-model-info',
+    '查询车次对应的车型信息。',
+    {
+        trainCode: z
+            .string()
+            .describe('要查询的车次 `train_code`，例如"G1033"。'),
+        departDate: z
+            .string()
+            .length(10)
+            .describe(
+                '列车出发的日期 (格式: yyyy-MM-dd)。用于兼容车型可能随日期变化的场景。'
+            ),
+        format: z
+            .string()
+            .regex(/^(text|json)$/i)
+            .default('text')
+            .optional()
+            .describe(
+                '返回结果格式，默认为text。可选标志：[text, json]'
+            ),
+    },
+    async ({ trainCode, departDate, format }) => {
+        const normalizedTrainCode = normalizeTrainCode(trainCode);
+        if (!TRAIN_CODE_RE.test(normalizedTrainCode)) {
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: 'Error: invalid train code.',
+                    },
+                ],
+            };
+        }
+
+        const records = await fetchRailReTrainRecords(normalizedTrainCode);
+        if (records == null) {
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: 'Error: get train model info failed.',
+                    },
+                ],
+            };
+        }
+        if (records.length === 0) {
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: '未查询到对应车次的车型信息。',
+                    },
+                ],
+            };
+        }
+
+        const modelNames: string[] = [];
+        const modelTypes = new Set<string>();
+        let latestDate: string | null = null;
+
+        records.forEach((record) => {
+            const emuNo = record.emu_no || '';
+            const modelName = extractModelFromEmu(emuNo);
+            if (modelName && !modelNames.includes(modelName)) {
+                modelNames.push(modelName);
+            }
+            if (modelName) {
+                modelTypes.add(inferModelType(modelName));
+            }
+            if (record.date && (latestDate === null || record.date > latestDate)) {
+                latestDate = record.date;
+            }
+        });
+
+        if (modelNames.length === 0) {
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: '未从数据源中提取到车型信息。',
+                    },
+                ],
+            };
+        }
+
+        const modelNameText = modelNames.join(', ');
+        const modelTypeText = Array.from(modelTypes).join(', ');
+        const note =
+            modelNames.length > 1
+                ? '检测到多种车型，可能存在交路差异。'
+                : '';
+
+        const result: Record<string, string | null> = {
+            trainCode: normalizedTrainCode,
+            departDate,
+            modelName: modelNameText,
+            modelType: modelTypeText,
+            source: 'rail.re',
+            latestDate,
+        };
+        if (note) {
+            result.note = note;
+        }
+
+        let formatedResult: string;
+        switch (format) {
+            case 'json':
+                formatedResult = JSON.stringify(result);
+                break;
+            default: {
+                let text = `${normalizedTrainCode} 车次近期使用的车型: ${modelNameText}。`;
+                if (modelTypeText) {
+                    text += `车型类型: ${modelTypeText}。`;
+                }
+                if (latestDate) {
+                    text += `数据时间: ${latestDate}。`;
+                }
+                if (note) {
+                    text += note;
+                }
+                formatedResult = text;
+                break;
+            }
+        }
+
         return {
             content: [{ type: 'text', text: formatedResult }],
         };

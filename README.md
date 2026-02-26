@@ -23,6 +23,7 @@ A 12306 ticket search server based on the Model Context Protocol (MCP). The serv
 | 过滤列车信息                   | ✅ 已完成  |
 | 过站查询                      | ✅ 已完成 |
 | 中转查询                      | ✅ 已完成 |
+| 查询车次车型信息               | ✅ 已完成 |
 | 其余接口，欢迎提feature         | 🚧 计划内 |
 
 </div>
