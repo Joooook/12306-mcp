@@ -1,5 +1,7 @@
 # <div align="center">12306-mcp</div>
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2FJoooook%2F12306-mcp.svg)](https://mcptoplist.com/server/glama%2FJoooook%2F12306-mcp)
+
 <div align="center">
 
 [![](https://img.shields.io/badge/Joooook-blue.svg?logo=github&lable=python&labelColor=497568&color=497568&style=flat-square)](https://github.com/Joooook)
