@@ -4,7 +4,14 @@
 import { program } from 'commander';
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
-import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import {
+    createMcpHandler,
+    localhostAllowedHostnames,
+    localhostAllowedOrigins,
+    McpServer,
+    validateHostHeader,
+    validateOriginHeader,
+} from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { SSEServerTransport } from '@modelcontextprotocol/server-legacy';
 import axios from 'axios';
@@ -1634,6 +1641,8 @@ async function getLCQueryPath(): Promise<string> {
 interface HttpServerOptions {
     host?: string;
     port?: string | number;
+    allowedHosts?: string[];
+    allowedOrigins?: string[];
 }
 
 interface McpHttpEndpoint {
@@ -1658,6 +1667,39 @@ function sendTextResponse(
         'content-type': 'text/plain; charset=utf-8',
     });
     res.end(message);
+}
+
+function validateHttpRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    allowedHostnames: string[],
+    allowedOriginHostnames: string[]
+): boolean {
+    const hostValidation = validateHostHeader(
+        req.headers.host,
+        allowedHostnames
+    );
+    const originValidation = validateOriginHeader(
+        req.headers.origin,
+        allowedOriginHostnames
+    );
+    const message = !hostValidation.ok
+        ? hostValidation.message
+        : !originValidation.ok
+          ? originValidation.message
+          : undefined;
+    if (message === undefined) {
+        return true;
+    }
+    res.writeHead(403, { 'content-type': 'application/json' });
+    res.end(
+        JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32000, message },
+            id: null,
+        })
+    );
+    return false;
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string | undefined> {
@@ -1731,6 +1773,8 @@ function getRequestSessionId(req: IncomingMessage): string | null {
 async function startMcpHttpServer({
     host,
     port,
+    allowedHosts,
+    allowedOrigins,
 }: HttpServerOptions): Promise<McpHttpEndpoint> {
     const listenPort = port === undefined ? DEFAULT_HTTP_PORT : Number(port);
     if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
@@ -1749,9 +1793,25 @@ async function startMcpHttpServer({
         await writeWebResponse(res, response);
     };
     const sseTransports = new Map<string, SSEServerTransport>();
+    const allowedHostnames = Array.from(
+        new Set([...localhostAllowedHostnames(), ...(allowedHosts ?? [])])
+    );
+    const allowedOriginHostnames = Array.from(
+        new Set([...localhostAllowedOrigins(), ...(allowedOrigins ?? [])])
+    );
 
     const httpServer = createHttpServer((req, res) => {
         void (async () => {
+            if (
+                !validateHttpRequest(
+                    req,
+                    res,
+                    allowedHostnames,
+                    allowedOriginHostnames
+                )
+            ) {
+                return;
+            }
             const path = getRequestPath(req);
             if (path === MCP_HTTP_PATH) {
                 await handleStreamableHttp(req, res);
@@ -1792,7 +1852,7 @@ async function startMcpHttpServer({
 
     await new Promise<void>((resolve, reject) => {
         httpServer.once('error', reject);
-        httpServer.listen(listenPort, host, () => {
+        httpServer.listen(listenPort, host ?? 'localhost', () => {
             httpServer.off('error', reject);
             resolve();
         });
@@ -1835,6 +1895,14 @@ program
         'host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.'
     )
     .option('--port <port>', 'port to listen on for SSE and HTTP transport.')
+    .option(
+        '--allowed-host <hostname...>',
+        'additional allowed Host header hostname(s), without ports.'
+    )
+    .option(
+        '--allowed-origin <hostname...>',
+        'additional allowed Origin hostname(s), without schemes or ports.'
+    )
     .action(async (options) => {
         try {
             await init();
@@ -1842,6 +1910,8 @@ program
                 await startMcpHttpServer({
                     host: options.host,
                     port: options.port,
+                    allowedHosts: options.allowedHost,
+                    allowedOrigins: options.allowedOrigin,
                 });
             } else {
                 serveStdio(() => createRegisteredServer());

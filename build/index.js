@@ -2,7 +2,7 @@
 // Data一般用于表示从服务器上请求到的数据，Info一般表示解析并筛选过的要传输给大模型的数据。变量使用驼峰命名，常量使用全大写下划线命名。
 import { program } from 'commander';
 import { createServer as createHttpServer } from 'node:http';
-import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import { createMcpHandler, localhostAllowedHostnames, localhostAllowedOrigins, McpServer, validateHostHeader, validateOriginHeader, } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { SSEServerTransport } from '@modelcontextprotocol/server-legacy';
 import axios from 'axios';
@@ -1255,6 +1255,25 @@ function sendTextResponse(res, statusCode, message) {
     });
     res.end(message);
 }
+function validateHttpRequest(req, res, allowedHostnames, allowedOriginHostnames) {
+    const hostValidation = validateHostHeader(req.headers.host, allowedHostnames);
+    const originValidation = validateOriginHeader(req.headers.origin, allowedOriginHostnames);
+    const message = !hostValidation.ok
+        ? hostValidation.message
+        : !originValidation.ok
+            ? originValidation.message
+            : undefined;
+    if (message === undefined) {
+        return true;
+    }
+    res.writeHead(403, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        error: { code: -32000, message },
+        id: null,
+    }));
+    return false;
+}
 async function readRequestBody(req) {
     const chunks = [];
     let size = 0;
@@ -1316,7 +1335,7 @@ function getRequestSessionId(req) {
     const host = req.headers.host ?? 'localhost';
     return new URL(req.url ?? '/', `http://${host}`).searchParams.get('sessionId');
 }
-async function startMcpHttpServer({ host, port, }) {
+async function startMcpHttpServer({ host, port, allowedHosts, allowedOrigins, }) {
     const listenPort = port === undefined ? DEFAULT_HTTP_PORT : Number(port);
     if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
         throw new Error(`Invalid port: ${port}`);
@@ -1330,8 +1349,13 @@ async function startMcpHttpServer({ host, port, }) {
         await writeWebResponse(res, response);
     };
     const sseTransports = new Map();
+    const allowedHostnames = Array.from(new Set([...localhostAllowedHostnames(), ...(allowedHosts ?? [])]));
+    const allowedOriginHostnames = Array.from(new Set([...localhostAllowedOrigins(), ...(allowedOrigins ?? [])]));
     const httpServer = createHttpServer((req, res) => {
         void (async () => {
+            if (!validateHttpRequest(req, res, allowedHostnames, allowedOriginHostnames)) {
+                return;
+            }
             const path = getRequestPath(req);
             if (path === MCP_HTTP_PATH) {
                 await handleStreamableHttp(req, res);
@@ -1370,7 +1394,7 @@ async function startMcpHttpServer({ host, port, }) {
     });
     await new Promise((resolve, reject) => {
         httpServer.once('error', reject);
-        httpServer.listen(listenPort, host, () => {
+        httpServer.listen(listenPort, host ?? 'localhost', () => {
             httpServer.off('error', reject);
             resolve();
         });
@@ -1400,6 +1424,8 @@ program
     .version(VERSION)
     .option('--host <host>', 'host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.')
     .option('--port <port>', 'port to listen on for SSE and HTTP transport.')
+    .option('--allowed-host <hostname...>', 'additional allowed Host header hostname(s), without ports.')
+    .option('--allowed-origin <hostname...>', 'additional allowed Origin hostname(s), without schemes or ports.')
     .action(async (options) => {
     try {
         await init();
@@ -1407,6 +1433,8 @@ program
             await startMcpHttpServer({
                 host: options.host,
                 port: options.port,
+                allowedHosts: options.allowedHost,
+                allowedOrigins: options.allowedOrigin,
             });
         }
         else {
