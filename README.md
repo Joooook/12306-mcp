@@ -55,6 +55,14 @@ npx -y 12306-mcp
 npx -y 12306-mcp --port [端口号]
 ~~~
 
+The HTTP server exposes Streamable HTTP at `/mcp` and keeps the legacy SSE
+transport at `/sse` with client messages posted to `/message`.
+
+### Runtime requirements
+
+The server requires Node.js 20 or newer. The `npm run debug` command runs
+MCP Inspector 2.0.0 through `npx`, which requires Node.js 22.19.0 or newer.
+
 ### MCP sever configuration
 
 ~~~json

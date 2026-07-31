@@ -13,7 +13,7 @@
     "prepare": "npm run build",
     "test": "tsc && node ./build/index.js",
     "test:http": "tsc && node ./build/index.js --port 8080",
-    "debug": "tsc && npx @modelcontextprotocol/inspector node ./build/index.js"
+    "debug": "tsc && npx --yes --package @modelcontextprotocol/inspector@2.0.0 mcp-inspector node ./build/index.js"
   },
   "keywords": [
     "mcp",
@@ -24,27 +24,18 @@
   "license": "MIT",
   "description": "This is a 12306 ticket search server based on the Model Context Protocol (MCP). ",
   "dependencies": {
-    "@modelcontextprotocol/inspector": "^2.0.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/server-legacy": "^2.0.0",
     "axios": "^1.18.1",
     "commander": "^14.0.3",
     "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
-    "mcp-http-server": "^1.2.4",
-    "zod": "^3.25.76"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "run-script-os": "^1.1.6",
     "typescript": "^5.9.3"
-  },
-  "overrides": {
-    "mcp-http-server": {
-      "@modelcontextprotocol/sdk": "^1.29.0"
-    },
-    "router": {
-      "path-to-regexp": "^8.4.2"
-    }
   },
   "type": "module",
   "bin": {
@@ -52,5 +43,8 @@
   },
   "files": [
     "build"
-  ]
+  ],
+  "engines": {
+    "node": ">=20"
+  }
 }
