@@ -2,9 +2,18 @@
 
 // Data一般用于表示从服务器上请求到的数据，Info一般表示解析并筛选过的要传输给大模型的数据。变量使用驼峰命名，常量使用全大写下划线命名。
 import { program } from 'commander';
-import { startSseAndStreamableHttpMcpServer } from 'mcp-http-server';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'node:http';
+import { AddressInfo } from 'node:net';
+import {
+    createMcpHandler,
+    localhostAllowedHostnames,
+    localhostAllowedOrigins,
+    McpServer,
+    validateHostHeader,
+    validateOriginHeader,
+} from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { SSEServerTransport } from '@modelcontextprotocol/server-legacy';
 import axios from 'axios';
 import { z } from 'zod';
 import { format, parse } from 'date-fns';
@@ -811,16 +820,42 @@ function createServer(): McpServer {
     );
 }
 
-export const server = createServer();
-const toolRegistrations: Array<(target: McpServer) => void> = [];
+type ToolInputSchema = z.ZodRawShape;
+type ToolCallback<InputSchema extends ToolInputSchema> = (
+    args: z.infer<z.ZodObject<InputSchema>>
+) => ReturnType<Parameters<McpServer['registerTool']>[2]>;
 
-const registerTool = ((...args: unknown[]) => {
-    const registration = (target: McpServer) => {
-        Reflect.apply(target.tool, target, args);
-    };
+export const server = createServer();
+const serverRegistrations: Array<(target: McpServer) => void> = [];
+
+function registerServerFeature(registration: (target: McpServer) => void) {
     registration(server);
-    toolRegistrations.push(registration);
-}) as McpServer['tool'];
+    serverRegistrations.push(registration);
+}
+
+function createRegisteredServer(): McpServer {
+    const registeredServer = createServer();
+    serverRegistrations.forEach((register) => register(registeredServer));
+    return registeredServer;
+}
+
+function registerTool<InputSchema extends ToolInputSchema>(
+    name: string,
+    description: string,
+    inputSchema: InputSchema,
+    callback: ToolCallback<InputSchema>
+) {
+    registerServerFeature((target) => {
+        target.registerTool(
+            name,
+            {
+                description,
+                inputSchema: z.object(inputSchema),
+            },
+            callback
+        );
+    });
+}
 
 interface QueryResponse {
     [key: string]: any;
@@ -841,9 +876,20 @@ interface LeftTicketsQueryResponse extends QueryResponse {
     messages: string;
 }
 
-server.resource('stations', 'data://all-stations', async (uri) => ({
-    contents: [{ uri: uri.href, text: JSON.stringify(STATIONS) }],
-}));
+registerServerFeature((target) => {
+    target.registerResource(
+        'stations',
+        'data://all-stations',
+        {
+            title: 'Stations',
+            description: 'All 12306 station metadata.',
+            mimeType: 'application/json',
+        },
+        async (uri) => ({
+            contents: [{ uri: uri.href, text: JSON.stringify(STATIONS) }],
+        })
+    );
+});
 
 registerTool(
     'get-current-date',
@@ -1592,6 +1638,252 @@ async function getLCQueryPath(): Promise<string> {
     return match[1];
 }
 
+interface HttpServerOptions {
+    host?: string;
+    port?: string | number;
+    allowedHosts?: string[];
+    allowedOrigins?: string[];
+}
+
+interface McpHttpEndpoint {
+    url: string;
+    sseUrl: string;
+    port: number;
+    close: () => Promise<void>;
+}
+
+const DEFAULT_HTTP_PORT = 8080;
+const MCP_HTTP_PATH = '/mcp';
+const SSE_PATH = '/sse';
+const SSE_MESSAGE_PATH = '/message';
+const MAX_HTTP_BODY_SIZE = 4 * 1024 * 1024;
+
+function sendTextResponse(
+    res: ServerResponse,
+    statusCode: number,
+    message: string
+) {
+    res.writeHead(statusCode, {
+        'content-type': 'text/plain; charset=utf-8',
+    });
+    res.end(message);
+}
+
+function validateHttpRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    allowedHostnames: string[],
+    allowedOriginHostnames: string[]
+): boolean {
+    const hostValidation = validateHostHeader(
+        req.headers.host,
+        allowedHostnames
+    );
+    const originValidation = validateOriginHeader(
+        req.headers.origin,
+        allowedOriginHostnames
+    );
+    const message = !hostValidation.ok
+        ? hostValidation.message
+        : !originValidation.ok
+          ? originValidation.message
+          : undefined;
+    if (message === undefined) {
+        return true;
+    }
+    res.writeHead(403, { 'content-type': 'application/json' });
+    res.end(
+        JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32000, message },
+            id: null,
+        })
+    );
+    return false;
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string | undefined> {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.byteLength;
+        if (size > MAX_HTTP_BODY_SIZE) {
+            throw new Error('HTTP request body is too large.');
+        }
+        chunks.push(buffer);
+    }
+    return chunks.length > 0 ? Buffer.concat(chunks).toString('utf8') : undefined;
+}
+
+async function toWebRequest(req: IncomingMessage): Promise<Request> {
+    const method = (req.method ?? 'GET').toUpperCase();
+    const host = req.headers.host ?? 'localhost';
+    const url = new URL(req.url ?? '/', `http://${host}`);
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers)) {
+        if (value === undefined) {
+            continue;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((entry) => headers.append(name, entry));
+        } else {
+            headers.set(name, value);
+        }
+    }
+    const body =
+        method === 'GET' || method === 'HEAD'
+            ? undefined
+            : await readRequestBody(req);
+    return new Request(url, {
+        method,
+        headers,
+        body,
+    });
+}
+
+async function writeWebResponse(res: ServerResponse, response: Response) {
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value, name) => {
+        headers[name] = value;
+    });
+    res.writeHead(response.status, headers);
+    if (response.body === null) {
+        res.end();
+        return;
+    }
+    for await (const chunk of response.body) {
+        res.write(chunk);
+    }
+    res.end();
+}
+
+function getRequestPath(req: IncomingMessage): string {
+    const host = req.headers.host ?? 'localhost';
+    return new URL(req.url ?? '/', `http://${host}`).pathname;
+}
+
+function getRequestSessionId(req: IncomingMessage): string | null {
+    const host = req.headers.host ?? 'localhost';
+    return new URL(req.url ?? '/', `http://${host}`).searchParams.get(
+        'sessionId'
+    );
+}
+
+async function startMcpHttpServer({
+    host,
+    port,
+    allowedHosts,
+    allowedOrigins,
+}: HttpServerOptions): Promise<McpHttpEndpoint> {
+    const listenPort = port === undefined ? DEFAULT_HTTP_PORT : Number(port);
+    if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
+        throw new Error(`Invalid port: ${port}`);
+    }
+
+    const streamableHandler = createMcpHandler(
+        async () => createRegisteredServer(),
+        {
+            onerror: (error) => console.error('MCP HTTP transport error:', error),
+        }
+    );
+    const handleStreamableHttp = async (req: IncomingMessage, res: ServerResponse) => {
+        const request = await toWebRequest(req);
+        const response = await streamableHandler.fetch(request);
+        await writeWebResponse(res, response);
+    };
+    const sseTransports = new Map<string, SSEServerTransport>();
+    const allowedHostnames = Array.from(
+        new Set([...localhostAllowedHostnames(), ...(allowedHosts ?? [])])
+    );
+    const allowedOriginHostnames = Array.from(
+        new Set([...localhostAllowedOrigins(), ...(allowedOrigins ?? [])])
+    );
+
+    const httpServer = createHttpServer((req, res) => {
+        void (async () => {
+            if (
+                !validateHttpRequest(
+                    req,
+                    res,
+                    allowedHostnames,
+                    allowedOriginHostnames
+                )
+            ) {
+                return;
+            }
+            const path = getRequestPath(req);
+            if (path === MCP_HTTP_PATH) {
+                await handleStreamableHttp(req, res);
+                return;
+            }
+            if (path === SSE_PATH && req.method === 'GET') {
+                const transport = new SSEServerTransport(SSE_MESSAGE_PATH, res);
+                sseTransports.set(transport.sessionId, transport);
+                transport.onclose = () => {
+                    sseTransports.delete(transport.sessionId);
+                };
+                transport.onerror = (error) =>
+                    console.error('MCP SSE transport error:', error);
+                await createRegisteredServer().connect(transport);
+                return;
+            }
+            if (path === SSE_MESSAGE_PATH && req.method === 'POST') {
+                const sessionId = getRequestSessionId(req);
+                const transport =
+                    sessionId === null ? undefined : sseTransports.get(sessionId);
+                if (transport === undefined) {
+                    sendTextResponse(res, 404, 'SSE session not found.');
+                    return;
+                }
+                await transport.handlePostMessage(req, res);
+                return;
+            }
+            sendTextResponse(res, 404, 'Not found.');
+        })().catch((error) => {
+            console.error('MCP HTTP server error:', error);
+            if (!res.headersSent) {
+                sendTextResponse(res, 500, 'Internal server error.');
+            } else {
+                res.end();
+            }
+        });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+        httpServer.once('error', reject);
+        httpServer.listen(listenPort, host ?? 'localhost', () => {
+            httpServer.off('error', reject);
+            resolve();
+        });
+    });
+
+    const address = httpServer.address() as AddressInfo;
+    const publicHost = host ?? 'localhost';
+    const baseUrl = `http://${publicHost}:${address.port}`;
+    console.error(`12306 MCP Server running on HTTP ${baseUrl}${MCP_HTTP_PATH}`);
+    console.error(`12306 MCP Server running on SSE ${baseUrl}${SSE_PATH}`);
+
+    return {
+        url: `${baseUrl}${MCP_HTTP_PATH}`,
+        sseUrl: `${baseUrl}${SSE_PATH}`,
+        port: address.port,
+        close: async () => {
+            await Promise.all(
+                Array.from(sseTransports.values()).map((transport) =>
+                    transport.close()
+                )
+            );
+            await streamableHandler.close();
+            await new Promise<void>((resolve, reject) => {
+                httpServer.close((error) =>
+                    error === undefined ? resolve() : reject(error)
+                );
+            });
+        },
+    };
+}
+
 async function init() {}
 
 program
@@ -1603,25 +1895,26 @@ program
         'host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.'
     )
     .option('--port <port>', 'port to listen on for SSE and HTTP transport.')
+    .option(
+        '--allowed-host <hostname...>',
+        'additional allowed Host header hostname(s), without ports.'
+    )
+    .option(
+        '--allowed-origin <hostname...>',
+        'additional allowed Origin hostname(s), without schemes or ports.'
+    )
     .action(async (options) => {
         try {
             await init();
             if (options.port || options.host) {
-                await startSseAndStreamableHttpMcpServer({
+                await startMcpHttpServer({
                     host: options.host,
                     port: options.port,
-                    // @ts-ignore
-                    createMcpServer: async () => {
-                        const httpServer = createServer();
-                        toolRegistrations.forEach((register) =>
-                            register(httpServer)
-                        );
-                        return httpServer;
-                    },
+                    allowedHosts: options.allowedHost,
+                    allowedOrigins: options.allowedOrigin,
                 });
             } else {
-                const transport = new StdioServerTransport();
-                await server.connect(transport);
+                serveStdio(() => createRegisteredServer());
                 console.error('12306 MCP Server running on stdio @Joooook');
             }
         } catch (error) {

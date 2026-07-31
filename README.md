@@ -55,10 +55,30 @@ npx -y 12306-mcp
 npx -y 12306-mcp --port [端口号]
 ~~~
 
+The HTTP server exposes Streamable HTTP at `/mcp` and keeps the legacy SSE
+transport at `/sse` with client messages posted to `/message`.
+
+HTTP 服务默认只允许来自 `localhost`、`127.0.0.1` 和 `[::1]` 的 Host 与
+Origin，本地访问无需额外配置白名单。
+
+使用 `--host 0.0.0.0` 只表示监听所有网络接口，不会自动允许远程 Host。
+远程访问时必须通过 `--allowed-host` 添加客户端实际使用的 IP 地址或域名；
+如果由浏览器调用，还需要通过 `--allowed-origin` 添加网页来源的主机名。
+白名单值不包含协议和端口：
+
+~~~bash
+npx -y 12306-mcp --host 0.0.0.0 --port 8080 \
+  --allowed-host 10.8.5.154 mcp.example.com \
+  --allowed-origin client.example.com
+~~~
+
+普通 MCP 客户端通常不发送 Origin，请求远程服务时只需配置
+`--allowed-host`。
+
 ### Runtime requirements
 
-The server requires Node.js 18 or newer. The `npm run debug` command uses
-MCP Inspector 2.0.0, which requires Node.js 22.19.0 or newer.
+The server requires Node.js 20 or newer. The `npm run debug` command runs
+MCP Inspector 2.0.0 through `npx`, which requires Node.js 22.19.0 or newer.
 
 ### MCP sever configuration
 
