@@ -495,6 +495,19 @@ function formatRouteStationsInfo(
     return result;
 }
 
+function calculateStopDuration(departure: string, nextArrival: string): string | null {
+    if (!/^\d{2}:\d{2}$/.test(departure) || !/^\d{2}:\d{2}$/.test(nextArrival)) {
+        return null;
+    }
+    const minutes = (value: string) => {
+        const [hours, mins] = value.split(':').map(Number);
+        return hours * 60 + mins;
+    };
+    let duration = minutes(nextArrival) - minutes(departure);
+    if (duration < 0) duration += 24 * 60;
+    return `${String(Math.floor(duration / 60)).padStart(2, '0')}:${String(duration % 60).padStart(2, '0')}`;
+}
+
 function filterTicketsInfo<T extends TicketInfo | InterlineInfo>(
     ticketsInfo: T[],
     trainFilterFlags: string,
@@ -790,6 +803,26 @@ async function make12306Request<T>(
     }
 }
 
+async function make12306PostRequest<T>(
+    url: string,
+    form: URLSearchParams,
+    headers: Record<string, string> = {}
+): Promise<T | null> {
+    try {
+        const response = await axios.post(url, form.toString(), {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                ...headers,
+            },
+            timeout: 10_000,
+        });
+        return response.data as T;
+    } catch (error) {
+        console.error('Error making 12306 POST request:', error);
+        return null;
+    }
+}
+
 function createServer(): McpServer {
     return new McpServer(
         {
@@ -806,6 +839,10 @@ function createServer(): McpServer {
                 '**原则：**\n' +
                 '*   **必要时追问**：如果用户信息不足以调用接口，请向用户追问缺失的信息。\n' +
                 '*   **尽量精确需求**：尽量利用筛选功能筛选用户需要的车票信息，从而简短上下文长度。\n\n' +
+                '**接口选择：**\n' +
+                '*   用户明确提供车次并询问该车的“时刻表”“列车时刻”“班次时间”或完整停站时间时，优先使用 `get-train-schedule`。\n' +
+                '*   用户只提供出发地、到达地和日期，询问某条线路有哪些高铁/车次时，使用 `get-tickets`；不要直接调用需要具体车次的 `get-train-schedule`。\n' +
+                '*   只有当用户明确询问“经停站”“途径车站”或指定区间内的停站详情时，才使用 `get-train-route-stations`。\n\n' +
                 '请根据上述指引选择接口。',
         }
     );
@@ -1434,9 +1471,139 @@ interface TrainSearchResponse extends QueryResponse {
     errorMsg: string;
 }
 
+interface OnTimeQueryResponse {
+    status: boolean;
+    data?: {
+        result?: string;
+        flag?: boolean;
+        message?: string;
+    };
+    message?: string;
+}
+
+function classifyOnTimeResult(result: string): 'on_time' | 'delayed' | 'unknown' {
+    const text = result.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (/晚点|延误/.test(text)) return 'delayed';
+    if (/正点|准点/.test(text)) return 'on_time';
+    return 'unknown';
+}
+
+registerTool(
+    'get-train-on-time-status',
+    '查询未来约3小时内指定车站和车次的正晚点信息。结果仅供参考，准确信息以车站公告为准。',
+    {
+        stationName: z.string().trim().min(1).describe('查询车站，例如北京南。'),
+        trainCode: z.string().trim().min(1).describe('车次，例如 G1。'),
+        queryType: z
+            .enum(['arrival', 'departure'])
+            .default('departure')
+            .optional()
+            .describe('查询到达或出发正晚点，默认为 departure。'),
+    },
+    async ({ stationName, trainCode, queryType }) => {
+        const cookies = await getCookie();
+        const response = await make12306PostRequest<OnTimeQueryResponse>(
+            `${API_BASE}/otn/zwdch/query`,
+            new URLSearchParams({
+                cxlx: queryType === 'arrival' ? '0' : '1',
+                cz: stationName,
+                cc: trainCode,
+                czEn: encodeURIComponent(stationName).replace(/%/g, '-'),
+                randCode: '',
+            }),
+            cookies ? { Cookie: formatCookies(cookies) } : undefined
+        );
+        const rawResult = response?.data?.result ?? response?.data?.message ?? response?.message ?? '';
+        const result = {
+            stationName,
+            trainCode,
+            queryType: queryType ?? 'departure',
+            status: response?.status ? classifyOnTimeResult(rawResult) : 'unknown',
+            providerResult: response?.data?.result ?? null,
+            providerFlag: response?.data?.flag ?? null,
+            rawMessage:
+                response?.data?.message?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() ||
+                rawResult.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() ||
+                null,
+            checkedAt: new Date().toISOString(),
+            limitation: '官方查询仅提供未来约3小时信息，结果仅供参考。',
+        };
+        return {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
+            structuredContent: result,
+        };
+    }
+);
+
+async function queryTrainSchedule(
+    trainCode: string,
+    departDate: string
+): Promise<RouteStationInfo[] | null> {
+    const searchResponse = await make12306Request<TrainSearchResponse>(
+        `${SEARCH_API_BASE}/search/v1/train/search`,
+        new URLSearchParams({
+            keyword: trainCode,
+            date: departDate.replaceAll('-', ''),
+        })
+    );
+    if (!searchResponse?.data?.length) return null;
+
+    const searchData = searchResponse.data[0];
+    const cookies = await getCookie();
+    if (!cookies || Object.keys(cookies).length === 0) return null;
+    const queryResponse = await make12306Request<RouteQueryResponse>(
+        `${API_BASE}/otn/queryTrainInfo/query`,
+        new URLSearchParams({
+            'leftTicketDTO.train_no': searchData.train_no,
+            'leftTicketDTO.train_date': departDate,
+            rand_code: '',
+        }),
+        { Cookie: formatCookies(cookies) }
+    );
+    if (!queryResponse?.data?.data) return null;
+    const stations = parseRouteStationsInfo(queryResponse.data.data);
+    return stations.length > 0 ? stations : null;
+}
+
+registerTool(
+    'get-train-schedule',
+    '【指定车次时刻表接口】仅当用户已提供具体车次，并询问该车的“时刻表”“列车时刻”“班次时间”或完整停站时间时使用本工具。不要用本工具直接查询“北京到上海有哪些高铁”这类路线级车次列表；此类请求应先使用 `get-tickets`。查询指定车次在指定日期的完整计划时刻表，包括始发站、终到站、经停站、到达时间、出发时间和停留时长。',
+    {
+        trainCode: z.string().trim().min(1).describe('车次，例如 G1。'),
+        departDate: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .describe('列车出发日期，格式为 yyyy-MM-dd。'),
+        stationName: z.string().trim().optional().describe('可选，指定车站时标记该站是否经停。'),
+    },
+    async ({ trainCode, departDate, stationName }) => {
+        const routeStationsInfo = await queryTrainSchedule(trainCode, departDate);
+        if (!routeStationsInfo) {
+            return { content: [{ type: 'text', text: '很抱歉，未查询到对应车次时刻表。' }] };
+        }
+        const target = stationName?.replace(/站$/, '');
+        const stations = routeStationsInfo.map((station, index, all) => ({
+            ...station,
+            stationIndex: index + 1,
+            isTargetStation: target
+                ? station.station_name.replace(/站$/, '') === target
+                : undefined,
+            stopDuration:
+                index < all.length - 1
+                    ? calculateStopDuration(station.start_time, all[index + 1].arrive_time)
+                    : null,
+        }));
+        const result = { trainCode, departDate, stationName: stationName ?? null, stations };
+        return {
+            content: [{ type: 'text', text: formatRouteStationsInfo(routeStationsInfo) }],
+            structuredContent: result,
+        };
+    }
+);
+
 registerTool(
     'get-train-route-stations',
-    '查询特定列车车次在指定区间内的途径车站、到站时间、出发时间及停留时间等详细经停信息。当用户询问某趟具体列车的经停站时使用此接口。',
+    '【经停站详情接口】仅当用户明确询问“经停站”“途径车站”或指定区间内的停站详情时使用。用户只说“时刻表”“列车时刻”或“班次时间”时不要使用本工具，应优先调用 `get-train-schedule`。',
     {
         trainCode: z
             .string()
