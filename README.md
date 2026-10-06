@@ -39,6 +39,7 @@ A 12306 ticket search server based on the Model Context Protocol (MCP). The serv
 
 ~~~bash
 git clone https://github.com/Joooook/12306-mcp.git
+cd 12306-mcp
 npm i
 ~~~
 
