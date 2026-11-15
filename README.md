@@ -35,6 +35,13 @@ A 12306 ticket search server based on the Model Context Protocol (MCP). The serv
   <img src="https://s2.loli.net/2025/04/15/rm1j8zX7sqiyafP.jpg" width=800px/>
 </div>
 
+## <div align="center">🔎查询范围与日期语义</div>
+
+- **车站范围**：`get-tickets` / `get-interline-tickets` 的 `stationScope` 默认为 `auto`。传中文城市名（如“北京”）按整座城市查询，传具体车站名（如“北京南”）或 `station_code`（如 `VNP`）只查该站。若要把 `get-station-code-of-citys` 返回的代表站编码当作整座城市使用，请显式设置 `stationScope: "city"`。
+- **结果过滤**：只保留实际出发站/到达站落在查询范围内的车次，且过滤发生在排序与 `limitedNum` 截取之前，同城其他站的车次不会挤掉正确结果。
+- **乘车日期**：直达车次的乘车日期取查询日期，不再使用 `start_train_date`（列车始发日期，凌晨经过中间站时已是第二天）。中转方案按分段历时与换乘等待时间逐段推算换乘日期、到达日期，并与 12306 返回的 `middle_date` / `arrive_date` / `all_lishi_minutes` 交叉校验，自相矛盾的方案会被丢弃。
+- **中转站点**：中转站按城市范围校验，同一城市内换站换乘（如郑州东 → 郑州）会保留。
+
 ## <div align="center">⚙️Installation</div>
 
 ~~~bash
