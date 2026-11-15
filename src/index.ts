@@ -10,6 +10,12 @@ import { z } from 'zod';
 import { format, parse } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import {
+    formatStationNameLookup,
+    hasOwn,
+    lookupStationNames,
+    sanitizeStationName,
+} from './station-names.js';
+import {
     InterlineData,
     InterlineInfo,
     InterlineTicketData,
@@ -297,14 +303,12 @@ async function getCookie() {
 function parseStationCode(station: string): string | null {
     // 判断fromStation和toStation是中文名还是station_code，如果是中文名则转换为station_code，如果转换失败则fromStation或toStation置为null
     const regex = /^[A-Z]+$/;
-    if (regex.test(station) && Object.keys(STATIONS).includes(station)) {
+    if (regex.test(station) && hasOwn(STATIONS, station)) {
         return station;
     } else {
-        station = station.endsWith('站')
-            ? station.substring(0, station.length - 1)
-            : station;
-        if (Object.keys(NAME_STATIONS).includes(station)) {
-            return NAME_STATIONS[station].station_code;
+        const stationName = sanitizeStationName(station);
+        if (stationName !== null && hasOwn(NAME_STATIONS, stationName)) {
+            return NAME_STATIONS[stationName].station_code;
         }
     }
     return null;
@@ -878,14 +882,18 @@ registerTool(
         city: z.string().describe('中文城市名称，例如："北京", "上海"'),
     },
     async ({ city }) => {
-        if (!(city in CITY_STATIONS)) {
+        const cityName = sanitizeStationName(city);
+        if (cityName === null || !hasOwn(CITY_STATIONS, cityName)) {
             return {
                 content: [{ type: 'text', text: 'Error: City not found. ' }],
             };
         }
         return {
             content: [
-                { type: 'text', text: JSON.stringify(CITY_STATIONS[city]) },
+                {
+                    type: 'text',
+                    text: JSON.stringify(CITY_STATIONS[cityName]),
+                },
             ],
         };
     }
@@ -902,16 +910,15 @@ registerTool(
             ),
     },
     async ({ citys }) => {
-        let result: Record<string, object> = {};
-        for (const city of citys.split('|')) {
-            if (!(city in CITY_CODES)) {
-                result[city] = { error: '未检索到城市。' };
-            } else {
-                result[city] = CITY_CODES[city];
-            }
-        }
         return {
-            content: [{ type: 'text', text: JSON.stringify(result) }],
+            content: [
+                {
+                    type: 'text',
+                    text: formatStationNameLookup(
+                        lookupStationNames(citys, CITY_CODES)
+                    ),
+                },
+            ],
         };
     }
 );
@@ -923,23 +930,19 @@ registerTool(
         stationNames: z
             .string()
             .describe(
-                '具体的中文车站名称，例如："北京南", "上海虹桥"。若要查询多个站点，请用|分割，比如"北京南|上海虹桥"。'
+                '具体的中文车站名称，例如："北京南", "上海虹桥"。若要查询多个站点，请用|分割，比如"北京南|上海虹桥"，最多20个。'
             ),
     },
     async ({ stationNames }) => {
-        let result: Record<string, object> = {};
-        for (let stationName of stationNames.split('|')) {
-            stationName = stationName.endsWith('站')
-                ? stationName.substring(0, stationName.length - 1)
-                : stationName;
-            if (!(stationName in NAME_STATIONS)) {
-                result[stationName] = { error: '未检索到城市。' };
-            } else {
-                result[stationName] = NAME_STATIONS[stationName];
-            }
-        }
         return {
-            content: [{ type: 'text', text: JSON.stringify(result) }],
+            content: [
+                {
+                    type: 'text',
+                    text: formatStationNameLookup(
+                        lookupStationNames(stationNames, NAME_STATIONS)
+                    ),
+                },
+            ],
         };
     }
 );
@@ -953,7 +956,7 @@ registerTool(
             .describe('车站的 `station_telecode` (3位字母编码)'),
     },
     async ({ stationTelecode }) => {
-        if (!STATIONS[stationTelecode]) {
+        if (!hasOwn(STATIONS, stationTelecode)) {
             return {
                 content: [{ type: 'text', text: 'Error: Station not found. ' }],
             };
