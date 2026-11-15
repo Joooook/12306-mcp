@@ -79,16 +79,22 @@ NAME_STATIONS: Record<string, { station_code: string; station_name: string }>
 ### 2.2 核心tool (输入可通过基础tool获取)
 
 - **`get-tickets`**: 查询12306余票信息
-  - 输入：出发日期、出发站id、到达站id、车次类型筛选
+  - 输入：出发日期、出发站id、到达站id、车次类型筛选、`stationScope`
   - 参数处理：检查日期不早于当前日期，验证车站id存在性, 构造请求入参
+  - 范围解析：`stationScope` 为 `auto`（默认）时，中文城市名查询该城市所有车站，车站名或 `station_code` 只查该站；`exact` / `city` 可强制指定范围（城市工具返回的代表站编码可用 `city` 当整座城市使用）
+  - 范围过滤：只保留实际起终点落在查询范围内的车次，且过滤发生在排序与 `limitedNum` 截取之前，避免同城其他站的车次挤掉正确结果
+  - 日期推算：乘车日期取查询日期、到达日期按历时推算，不使用 `start_train_date`（它是列车始发日期，列车凌晨经过中间站时已是第二天）
   - Cookie 处理：先获取 12306 Cookie 用于身份验证
   - API 调用：访问 `/otn/leftTicket/query` 接口
   - 数据处理, 车次类型筛选
   - 返回格式化数据
 
 - **`get-interline-tickets`**: 中转换乘查询，支持指定中转站
-  - 输入：出发站id、到达站id、中转站id、是否显示无座、车次类型筛选
+  - 输入：出发站id、到达站id、中转站id、是否显示无座、车次类型筛选、`stationScope`
   - 参数处理：检查日期不早于当前日期，验证车站id存在性, 构造请求入参
+  - 日期推算：第一段按查询日期发车，第二段发车时间 = 第一段到达 + 换乘等待时间，到达时间逐段累加；结果用上游的 `middle_date`、`arrive_date`、`all_lishi_minutes` 交叉校验，任何一项对不上就丢弃该方案
+  - 范围校验：两段的实际出发/到达站必须落在查询范围内，中转站按城市范围校验（12306 本身按城市返回换站换乘方案）
+  - 分页：以“通过校验和筛选的候选数”决定是否继续翻页，单页全部被过滤时不会误判为无结果
   - Cookie 处理：先获取 12306 Cookie 用于身份验证
   - API 调用：访问 `/lcquery/queryU` 接口
   - 数据处理, 车次类型筛选
@@ -112,11 +118,12 @@ NAME_STATIONS: Record<string, { station_code: string; station_name: string }>
 2. 大模型理解后天日期 → "2024-01-17"
 3. get-station-code-of-citys("北京|上海") → {"北京": {"station_code": "BJP","station_name": "北京"}, "上海": {"station_code": "SHH","station_name": "上海"}}
     ↓
-4. get-tickets(date: "2024-01-17", fromStation: "BJP", toStation: "SHH", trainFilterFlags: "G")
+4. get-tickets(date: "2024-01-17", fromStation: "BJP", toStation: "SHH", trainFilterFlags: "G", stationScope: "city")
+   （按城市查询：要么直接传中文城市名，要么传代表站编码并指定 stationScope=city）
     ↓
-5. 内部数据处理(参数验证, Cookie获取, API调用, 格式化输出文本)
+5. 内部数据处理(参数验证, 查询范围解析, Cookie获取, API调用, 日期推算与范围过滤, 格式化输出文本)
     ↓
-6. 返回格式化的高铁车次信息（车次、时间、价格、余票等）
+6. 返回格式化的高铁车次信息（车次、时间、价格、余票等），只包含实际起终点在查询范围内的车次
 ```
 
 ### 3.2 中转查询流程
